@@ -1,0 +1,35 @@
+[project]
+name = "vadas-india"
+version = "1.0.0"
+description = "Vehicle Autonomous Driving Assistance System for Indian Roads"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "ultralytics>=8.1",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.25",
+    "opencv-python>=4.9",
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+vadas = "run:main"
+
+[tool.uv]
+dev-dependencies = [
+    "matplotlib>=3.8",
+    "tensorboard>=2.15",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }

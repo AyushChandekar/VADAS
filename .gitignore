@@ -1,0 +1,45 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# ── Model weights (large binaries) ─────────────────────
+*.pth
+*.pt
+*.onnx
+*.engine
+
+# ── Datasets & training runs ───────────────────────────
+datasets/
+runs/
+
+# ── Frontend build ─────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+
+# ── IDE / Editor ───────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS generated ───────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Claude Code ────────────────────────────────────────
+.claude/
+
+# ── Project-specific ignores ───────────────────────────
+generate_dev_plan.py
+*.docx
+
+results/
+
+VADAS_India_Development_Plan.docx
+

@@ -67,9 +67,23 @@ class DrivableSegmentor:
         self.img_w = img_w
         self.img_h = img_h
 
-        self.model = UNet(in_channels=3, num_classes=2, base=base, dropout=0.1)
         ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        state = ckpt["model_state"] if "model_state" in ckpt else ckpt
+        config = ckpt.get("config", {}) if isinstance(ckpt, dict) else {}
+        model_type = config.get("model_type", "unet_scratch")
+
+        if model_type == "smp_resnet18":
+            import segmentation_models_pytorch as smp
+            self.model = smp.Unet(
+                encoder_name="resnet18",
+                encoder_weights=None,
+                in_channels=3,
+                classes=2,
+                activation=None,
+            )
+        else:
+            self.model = UNet(in_channels=3, num_classes=2, base=base, dropout=0.1)
+
+        state = ckpt["model_state"] if isinstance(ckpt, dict) and "model_state" in ckpt else ckpt
         self.model.load_state_dict(state)
         self.model.to(device).eval()
 

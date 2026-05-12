@@ -14,6 +14,35 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from inference.pipeline import InferencePipeline
 from inference.camera import CameraCapture, VideoFileCapture
 
+# ── Globals (initialized on startup) ─────────────────────────────────
+pipeline: InferencePipeline | None = None
+camera: CameraCapture | None = None
+inference_thread: threading.Thread | None = None
+running = False
+
+
+def _inference_loop():
+    """Continuously grab frames and run the AI pipeline."""
+    global running
+    print("Inference loop: waiting for first frame...")
+    frame_count = 0
+    while running:
+        try:
+            frame = camera.get_latest_frame()
+            if frame is not None:
+                if frame_count == 0:
+                    print(f"Inference loop: first frame received! Shape: {frame.shape}")
+                pipeline.process_frame(frame)
+                frame_count += 1
+                if frame_count % 100 == 0:
+                    print(f"Inference loop: processed {frame_count} frames")
+            else:
+                time.sleep(0.05)
+        except Exception as e:
+            print(f"Inference loop error: {e}")
+            time.sleep(0.5)
+
+
 app = FastAPI(title="VADAS-India API", version="1.0")
 
 app.add_middleware(

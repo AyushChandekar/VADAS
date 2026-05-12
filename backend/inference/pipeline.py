@@ -3,9 +3,9 @@ import threading
 import numpy as np
 import cv2
 
-from models.detector import ObjectDetector
+from models.detector import ObjectDetector, Detection
 from models.segmentor import DrivableSegmentor
-from models.trajectory import TrajectoryPlanner
+from models.trajectory import PathGuidancePlanner
 from models.decision_engine import DecisionEngine
 from inference.annotator import annotate_frame
 
@@ -13,7 +13,7 @@ from inference.annotator import annotate_frame
 class InferencePipeline:
     """
     Combined AI pipeline: runs YOLO + U-Net on every frame,
-    computes trajectory and decision, produces annotated output.
+    computes path guidance and decision, produces annotated output.
 
     Thread-safe — the backend reads latest results while the
     pipeline processes frames continuously.
@@ -29,7 +29,7 @@ class InferencePipeline:
         self.segmentor = DrivableSegmentor(unet_path, device=device)
         print("Models loaded.")
 
-        self.trajectory_planner = TrajectoryPlanner()
+        self.path_planner = PathGuidancePlanner()
         self.decision_engine = DecisionEngine()
 
         # Shared state (thread-safe)
@@ -54,8 +54,24 @@ class InferencePipeline:
         detections = self.detector.predict(frame_bgr)
         drivable_mask = self.segmentor.predict(frame_bgr)
 
-        # Trajectory
-        trajectory = self.trajectory_planner.plan(drivable_mask)
+        # Scale detections for path planning (fusion)
+        # Mask resolution is (self.segmentor.img_w, self.segmentor.img_h) = (512, 256)
+        scale_x = self.segmentor.img_w / w
+        scale_y = self.segmentor.img_h / h
+        scaled_detections = []
+        for d in detections:
+            scaled_detections.append(Detection(
+                class_name=d.class_name,
+                class_id=d.class_id,
+                confidence=d.confidence,
+                x1=int(d.x1 * scale_x),
+                y1=int(d.y1 * scale_y),
+                x2=int(d.x2 * scale_x),
+                y2=int(d.y2 * scale_y)
+            ))
+
+        # Path Guidance (Fusion: Mask - Detections)
+        trajectory = self.path_planner.plan(drivable_mask, scaled_detections)
 
         # Decision
         decision = self.decision_engine.decide(detections, trajectory, h, w)

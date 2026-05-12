@@ -16,6 +16,7 @@ venv/
 # ── Datasets & training runs ───────────────────────────
 datasets/
 runs/
+trainingCodes/
 
 # ── Frontend build ─────────────────────────────────────
 frontend/node_modules/

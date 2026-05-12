@@ -4,7 +4,8 @@ Local U-Net training on IDD Segmentation (fallback — prefer Kaggle).
 Usage:
     python -m training.train_unet \
         --images path/to/leftImg8bit \
-        --masks  path/to/drivable_masks
+        --masks  path/to/drivable_masks \
+        --epochs 25
 """
 
 import argparse
@@ -22,7 +23,7 @@ from torchvision import transforms
 from PIL import Image
 from pathlib import Path
 
-from models.segmentor import UNet
+import segmentation_models_pytorch as smp
 
 
 class DrivableDataset(Dataset):
@@ -34,7 +35,10 @@ class DrivableDataset(Dataset):
 
         self.transform_train = transforms.Compose([
             transforms.Resize((img_h, img_w)),
-            transforms.ColorJitter(0.3, 0.3, 0.2, 0.05),
+            transforms.ColorJitter(0.4, 0.4, 0.3, 0.08),
+            transforms.RandomGrayscale(p=0.1),
+            transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+            transforms.RandomAffine(degrees=5, translate=(0.05, 0.05)),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
@@ -77,9 +81,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--images", required=True, help="Image directory")
     parser.add_argument("--masks", required=True, help="Pre-rendered mask directory")
-    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch", type=int, default=8)
-    parser.add_argument("--base", type=int, default=64, help="U-Net base channels")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--device", default="cuda")
@@ -116,8 +119,24 @@ def main():
     val_loader = DataLoader(val_ds, batch_size=args.batch, shuffle=False,
                             num_workers=4, pin_memory=True)
 
-    model = UNet(base=args.base).to(args.device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    model = smp.Unet(
+        encoder_name="resnet18",
+        encoder_weights="imagenet",
+        in_channels=3,
+        classes=2,
+        activation=None,
+    ).to(args.device)
+
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model parameters: {total_params / 1e6:.2f}M (ResNet18 encoder, pretrained)")
+
+    # Differential LR: lower for pretrained encoder, full LR for decoder
+    optimizer = torch.optim.AdamW([
+        {"params": model.encoder.parameters(), "lr": args.lr * 0.1},
+        {"params": model.decoder.parameters(), "lr": args.lr},
+        {"params": model.segmentation_head.parameters(), "lr": args.lr},
+    ], weight_decay=1e-5)
+
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     criterion = DiceBCELoss()
     scaler = torch.amp.GradScaler("cuda")
@@ -158,9 +177,15 @@ def main():
             best_iou = val_iou
             patience_cnt = 0
             torch.save({
-                "epoch": epoch, "model_state": model.state_dict(),
+                "epoch": epoch,
+                "model_state": model.state_dict(),
                 "val_iou": val_iou,
-                "config": {"base_channels": args.base, "img_w": 512, "img_h": 256},
+                "config": {
+                    "model_type": "smp_resnet18",
+                    "encoder": "resnet18",
+                    "img_w": 512,
+                    "img_h": 256,
+                },
             }, "checkpoints/unet_drivable_best.pth")
             print(f"  >>> Saved (IoU: {best_iou:.4f})")
         else:

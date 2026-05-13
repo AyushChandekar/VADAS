@@ -11,11 +11,11 @@ COLOR_BOX_PERSON = (0, 0, 255)     # red
 COLOR_BOX_OTHER = (200, 200, 0)    # cyan
 
 ACTION_COLORS = {
-    "DRIVE FORWARD": (0, 200, 0),
+    "MOVE FORWARD": (0, 200, 0),
     "SLOW DOWN": (0, 200, 255),
     "STOP": (0, 0, 255),
-    "TURN LEFT": (255, 200, 0),
-    "TURN RIGHT": (255, 200, 0),
+    "MOVE LEFT": (255, 200, 0),
+    "MOVE RIGHT": (255, 200, 0),
     "HORN": (0, 255, 255),
     "WIPER": (200, 200, 200),
 }
@@ -53,13 +53,12 @@ def annotate_frame(
         pts = [(int(x * scale_x), int(y * scale_y)) for x, y in polyline]
 
         for i in range(len(pts) - 1):
-            cv2.line(out, pts[i], pts[i + 1], COLOR_TRAJECTORY, 3, cv2.LINE_AA)
+            cv2.line(out, pts[i], pts[i + 1], COLOR_TRAJECTORY, 4, cv2.LINE_AA)
 
-        # Steering target
+        # Steering target (more subtle)
         st = trajectory["steering_target"]
         target_pt = (int(st[0] * scale_x), int(st[1] * scale_y))
-        cv2.circle(out, target_pt, 12, COLOR_TARGET, 3, cv2.LINE_AA)
-        cv2.circle(out, target_pt, 4, COLOR_TARGET, -1, cv2.LINE_AA)
+        cv2.circle(out, target_pt, 6, COLOR_TARGET, -1, cv2.LINE_AA)
 
     # 3. Detection boxes
     for det in detections:

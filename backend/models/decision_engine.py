@@ -1,143 +1,138 @@
 from models.detector import Detection
 from configs.classes import CRITICAL_CLASSES, VEHICLE_CLASSES
-
+from collections import deque
+import numpy as np
 
 class DecisionEngine:
-    """Rule-based driving decision from detections + trajectory."""
+    """
+    Robust, stable, and explainable driving decision engine.
+    Uses temporal smoothing and priority handling to prevent flickering.
+    """
 
-    # Proximity zones based on bounding box bottom-y relative to frame height
-    ZONE_CLOSE = 0.85    # bottom 15% of frame -> very close
-    ZONE_MEDIUM = 0.65   # 65-85% -> medium distance
-    # above 65% -> far
+    # Proximity zones (normalized y-coordinates)
+    ZONE_STOP = 0.88      # Bottom 12% - immediate danger
+    ZONE_SLOW = 0.65      # Middle-bottom - caution area
+    
+    # Path/Road thresholds
+    MIN_DRIVABLE_WIDTH = 0.15
+    STEERING_THRESHOLD = 0.20 # Normalized deviation for turning
 
-    # Minimum drivable width to consider road "narrow"
-    NARROW_THRESHOLD = 0.30
+    def __init__(self, history_len: int = 10):
+        # Memory for temporal stability
+        self.decision_history = deque(maxlen=history_len)
+        self.reason_history = deque(maxlen=history_len)
+        
+        # Priority mapping (Higher value = higher priority)
+        self.priority = {
+            "STOP": 100,
+            "SLOW DOWN": 80,
+            "MOVE LEFT": 60,
+            "MOVE RIGHT": 60,
+            "MOVE FORWARD": 20,
+            "INITIALIZING": 0
+        }
 
     def decide(self, detections: list[Detection], trajectory: dict,
                frame_h: int, frame_w: int) -> dict:
         """
-        Args:
-            detections: list of Detection from YOLO
-            trajectory: dict from TrajectoryPlanner.plan()
-            frame_h, frame_w: original frame dimensions
-        Returns:
-            dict with keys:
-                - action: str (STOP, SLOW DOWN, TURN LEFT, TURN RIGHT,
-                          DRIVE FORWARD, HORN, WIPER)
-                - reason: str (human-readable explanation)
-                - confidence: float (0-1)
+        Processes frame data and returns a stable decision with XAI reasoning.
         """
-        direction = trajectory.get("steering_direction", "CENTER")
+        # 1. Gather raw context
+        steering_dir = trajectory.get("steering_direction", "CENTER")
         drivable_width = trajectory.get("drivable_width_ratio", 0.0)
-        has_path = len(trajectory.get("polyline", [])) >= 2
+        has_path = len(trajectory.get("polyline", [])) >= 3
+        
+        # 2. Evaluate environmental conditions (Raw Candidates)
+        candidates = []
 
-        # Classify detections by proximity
-        close_critical = []
-        close_vehicles = []
-        medium_critical = []
-        medium_vehicles = []
-        horn_candidates = []
-
+        # -- Condition: Obstacles --
         for det in detections:
             rel_bottom = det.bottom_y / frame_h
-            rel_area = det.area / (frame_h * frame_w)
-
-            if rel_bottom > self.ZONE_CLOSE or rel_area > 0.08:
-                # Very close
+            
+            # STOP Conditions
+            if rel_bottom > self.ZONE_STOP:
                 if det.class_name in CRITICAL_CLASSES:
-                    close_critical.append(det)
+                    candidates.append(("STOP", f"Critical obstacle ({det.class_name}) very close"))
                 elif det.class_name in VEHICLE_CLASSES:
-                    close_vehicles.append(det)
-            elif rel_bottom > self.ZONE_MEDIUM or rel_area > 0.03:
-                # Medium distance
+                    candidates.append(("STOP", f"Vehicle too close ahead"))
+
+            # SLOW DOWN Conditions
+            elif rel_bottom > self.ZONE_SLOW:
                 if det.class_name in CRITICAL_CLASSES:
-                    medium_critical.append(det)
+                    candidates.append(("SLOW DOWN", f"Caution: {det.class_name} ahead"))
                 elif det.class_name in VEHICLE_CLASSES:
-                    medium_vehicles.append(det)
+                    candidates.append(("SLOW DOWN", f"Following vehicle ahead"))
 
-                # Horn candidates: person/animal in drivable zone at warning distance
-                if det.class_name in ("person", "animal", "rider"):
-                    horn_candidates.append(det)
-
-        # Decision priority (highest to lowest)
-
-        # 1. STOP — critical object very close OR no drivable path
-        if close_critical:
-            names = ", ".join(d.class_name for d in close_critical)
-            return {
-                "action": "STOP",
-                "reason": f"Critical object very close: {names}",
-                "confidence": 0.95,
-            }
-
+        # -- Condition: Road/Path --
         if not has_path or drivable_width < 0.05:
-            return {
-                "action": "STOP",
-                "reason": "No drivable path detected",
-                "confidence": 0.85,
-            }
+            candidates.append(("STOP", "No drivable path detected"))
+        elif drivable_width < self.MIN_DRIVABLE_WIDTH:
+            candidates.append(("SLOW DOWN", f"Narrow road (width: {drivable_width:.0%})"))
 
-        # 2. SLOW DOWN — vehicle close OR critical at medium OR narrow road
-        if close_vehicles:
-            names = ", ".join(d.class_name for d in close_vehicles[:3])
-            return {
-                "action": "SLOW DOWN",
-                "reason": f"Vehicle close ahead: {names}",
-                "confidence": 0.85,
-            }
+        # -- Condition: Turning (Guidance) --
+        if steering_dir == "LEFT":
+            candidates.append(("MOVE LEFT", "Path curves left"))
+        elif steering_dir == "RIGHT":
+            candidates.append(("MOVE RIGHT", "Path curves right"))
 
-        if medium_critical:
-            names = ", ".join(d.class_name for d in medium_critical)
-            return {
-                "action": "SLOW DOWN",
-                "reason": f"Caution — {names} ahead",
-                "confidence": 0.80,
-            }
+        # -- Default: Move Forward --
+        if not candidates:
+            candidates.append(("MOVE FORWARD", "Path ahead is clear"))
 
-        if drivable_width < self.NARROW_THRESHOLD:
-            return {
-                "action": "SLOW DOWN",
-                "reason": f"Narrow road (width: {drivable_width:.0%})",
-                "confidence": 0.70,
-            }
+        # 3. Priority Handling (Pick the most critical candidate)
+        best_action, best_reason = self._pick_highest_priority(candidates)
 
-        # 3. HORN — person/animal at warning distance
-        if horn_candidates:
-            return {
-                "action": "HORN",
-                "reason": f"Warning: {horn_candidates[0].class_name} on road ahead",
-                "confidence": 0.65,
-            }
+        # 4. Temporal Stability (Hysteresis/Voting)
+        # We don't change decisions unless the new one persists or has much higher priority
+        stable_action, stable_reason = self._smooth_decision(best_action, best_reason)
 
-        # 4. TURN — based on trajectory steering
-        if direction == "LEFT" and medium_vehicles:
-            return {
-                "action": "TURN LEFT",
-                "reason": "Path curves left, vehicles ahead",
-                "confidence": 0.75,
-            }
-        if direction == "RIGHT" and medium_vehicles:
-            return {
-                "action": "TURN RIGHT",
-                "reason": "Path curves right, vehicles ahead",
-                "confidence": 0.75,
-            }
-        if direction == "LEFT":
-            return {
-                "action": "TURN LEFT",
-                "reason": "Road curves left",
-                "confidence": 0.70,
-            }
-        if direction == "RIGHT":
-            return {
-                "action": "TURN RIGHT",
-                "reason": "Road curves right",
-                "confidence": 0.70,
-            }
-
-        # 5. DRIVE FORWARD — all clear
         return {
-            "action": "DRIVE FORWARD",
-            "reason": "Clear road ahead",
-            "confidence": 0.90,
+            "action": stable_action,
+            "reason": stable_reason,
+            "confidence": 0.9, # Rule-based confidence
         }
+
+    def _pick_highest_priority(self, candidates):
+        """Returns the candidate with the highest priority score."""
+        top_action, top_reason = candidates[0]
+        max_p = self.priority.get(top_action, 0)
+        
+        for action, reason in candidates[1:]:
+            p = self.priority.get(action, 0)
+            if p > max_p:
+                max_p = p
+                top_action, top_reason = action, reason
+                
+        return top_action, top_reason
+
+    def _smooth_decision(self, action, reason):
+        """Applies a voting mechanism to prevent flickering."""
+        self.decision_history.append(action)
+        self.reason_history.append(reason)
+        
+        # If the top priority action (like STOP) is requested, we act faster
+        if action == "STOP":
+            # Just 2 consecutive frames of STOP are enough to trigger it
+            if list(self.decision_history)[-2:].count("STOP") >= 2:
+                return action, reason
+        
+        # For other actions, use a majority vote over the last N frames
+        unique_actions = set(self.decision_history)
+        counts = {a: list(self.decision_history).count(a) for a in unique_actions}
+        
+        # Get action with max counts
+        winner = max(counts, key=counts.get)
+        
+        # If winner is different from current action, but current has high priority, stick to winner 
+        # only if it has a solid majority (e.g. 60% of history)
+        if counts[winner] >= (self.decision_history.maxlen * 0.6):
+            # Find the most recent reason for the winning action
+            win_reason = reason
+            for i in range(len(self.decision_history)-1, -1, -1):
+                if self.decision_history[i] == winner:
+                    win_reason = self.reason_history[i]
+                    break
+            return winner, win_reason
+            
+        # Fallback to the most recent decision if no clear majority
+        return self.decision_history[-1], self.reason_history[-1]

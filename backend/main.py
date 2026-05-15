@@ -186,57 +186,72 @@ def shutdown() -> None:
 
 @app.post("/api/upload_video")
 async def upload_video(file: UploadFile = File(...)) -> JSONResponse:
-    if not file.content_type.startswith("video/"):
-        raise HTTPException(status_code=400, detail="Only video files are accepted.")
-
-    # 40MB limit
-    MAX_SIZE = 40 * 1024 * 1024
-    contents = await file.read()
-    if len(contents) > MAX_SIZE:
-        raise HTTPException(status_code=413, detail="File too large. Maximum size is 40MB.")
-
     try:
-        with open(UPLOADED_VIDEO_PATH, "wb") as dest_file:
-            dest_file.write(contents)
-        # Force flush to disk
-        dest_file.flush()
-        os.fsync(dest_file.fileno())
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to save upload: {exc}")
+        if not file.content_type.startswith("video/"):
+            return JSONResponse(status_code=400, content={"detail": "Only video files are accepted."})
 
-    stop_inference()
-    stop_camera()
-    
-    # Wait a bit for file to be ready
-    time.sleep(1.0)
+        # 40MB limit
+        MAX_SIZE = 40 * 1024 * 1024
+        contents = await file.read()
+        if len(contents) > MAX_SIZE:
+            return JSONResponse(status_code=413, content={"detail": "File too large. Maximum size is 40MB."})
 
-    try:
-        # Re-initialize pipeline if it's not loaded yet
-        if pipeline is None:
-            print("Pipeline is None, triggering manual startup...")
-            try:
-                startup()
-            except Exception as e:
-                print(f"Manual startup failed: {e}")
-                # Don't raise here, we might still be able to open the video
+        # Define path for HF environment (use home dir if possible)
+        save_path = os.path.join(ROOT_DIR, "uploaded_video.mp4")
+        print(f"Saving uploaded video to {save_path}...")
         
-        camera = VideoFileCapture(UPLOADED_VIDEO_PATH)
-        print(f"Uploaded video capture created. Pipeline state: {pipeline is not None}")
-    except Exception as exc:
-        print(f"Error opening uploaded video: {exc}")
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"Cannot open uploaded video: {str(exc)}"}
-        )
-
-    if pipeline is not None and camera is not None:
         try:
-            start_inference()
-            print("Inference started for uploaded video.")
-        except Exception as e:
-            print(f"Error starting inference: {e}")
+            with open(save_path, "wb") as dest_file:
+                dest_file.write(contents)
+                dest_file.flush()
+                os.fsync(dest_file.fileno())
+        except Exception as exc:
+            print(f"Error saving video to {save_path}: {exc}")
+            # Fallback to /tmp if app dir is not writable
+            save_path = "/tmp/uploaded_video.mp4"
+            print(f"Retrying save to {save_path}...")
+            with open(save_path, "wb") as dest_file:
+                dest_file.write(contents)
 
-    return JSONResponse({"detail": "Video uploaded successfully. Inference will begin shortly."})
+        print("Stopping existing inference...")
+        stop_inference()
+        stop_camera()
+        
+        # Wait a bit for file to be ready
+        time.sleep(1.0)
+
+        global camera, pipeline
+        try:
+            # Re-initialize pipeline if it's not loaded yet
+            if pipeline is None:
+                print("Pipeline is None, triggering manual startup...")
+                startup()
+            
+            print(f"Attempting to open VideoFileCapture: {save_path}")
+            camera = VideoFileCapture(save_path)
+            print(f"Uploaded video capture created. Pipeline state: {pipeline is not None}")
+        except Exception as exc:
+            print(f"Error opening uploaded video: {exc}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"detail": f"Cannot open uploaded video: {str(exc)}"}
+            )
+
+        if pipeline is not None and camera is not None:
+            try:
+                start_inference()
+                print("Inference started for uploaded video.")
+            except Exception as e:
+                print(f"Error starting inference: {e}")
+
+        return JSONResponse({"detail": "Video uploaded successfully. Inference will begin shortly."})
+    except Exception as e:
+        print(f"Global error in upload_video: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": f"Internal Server Error: {str(e)}"})
 
 
 @app.get("/api/frame")

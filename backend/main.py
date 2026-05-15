@@ -198,19 +198,31 @@ async def upload_video(file: UploadFile = File(...)) -> JSONResponse:
     try:
         with open(UPLOADED_VIDEO_PATH, "wb") as dest_file:
             dest_file.write(contents)
+        # Force flush to disk
+        dest_file.flush()
+        os.fsync(dest_file.fileno())
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to save upload: {exc}")
 
     stop_inference()
     stop_camera()
+    
+    # Wait a bit for file to be ready
+    time.sleep(1.0)
 
     try:
+        # Re-initialize pipeline if it's not loaded yet
+        if pipeline is None:
+            startup()
+        
         camera = VideoFileCapture(UPLOADED_VIDEO_PATH)
+        print(f"Uploaded video capture created. Pipeline state: {pipeline is not None}")
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=f"Cannot open uploaded video: {exc}")
 
-    if pipeline is not None:
+    if pipeline is not None and camera is not None:
         start_inference()
+        print("Inference started for uploaded video.")
 
     return JSONResponse({"detail": "Video uploaded successfully. Inference will begin shortly."})
 
@@ -222,7 +234,9 @@ def get_frame() -> Response:
 
     jpeg = pipeline.get_latest_frame_jpeg()
     if jpeg is None:
-        return Response(status_code=204)
+        # Return a 1x1 transparent pixel instead of 204 to avoid frontend errors
+        transparent_pixel = b'\xff\xd8\xff\xdb\x00\x43\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c\x20\x24\x2e\x27\x20\x22\x2c\x23\x1c\x1c\x28\x37\x29\x2c\x30\x31\x34\x34\x34\x1f\x27\x39\x3d\x38\x32\x3c\x2e\x33\x34\x32\xff\xcb\x00\x11\x08\x00\x01\x00\x01\x03\x01\x11\x00\x02\x11\x01\x03\x11\x01\xff\xda\x00\x08\x03\x01\x00\x02\x11\x03\x11\x00\x3f\x00\xa2\x8a\x0f\xff\xd9'
+        return Response(content=transparent_pixel, media_type="image/jpeg")
 
     return StreamingResponse(io.BytesIO(jpeg), media_type="image/jpeg")
 

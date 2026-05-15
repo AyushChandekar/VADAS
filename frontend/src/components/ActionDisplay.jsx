@@ -13,7 +13,7 @@ const ACTION_STYLES = {
 }
 
 export default function ActionDisplay() {
-  const { data } = usePolling('/api/status', 500)
+  const { data } = usePolling('/api/status', 1000)
 
   const action = data?.action || 'OFFLINE'
   const reason = data?.reason || 'Waiting for connection...'

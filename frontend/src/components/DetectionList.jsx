@@ -7,7 +7,7 @@ const PROXIMITY_COLORS = {
 }
 
 export default function DetectionList() {
-  const { data } = usePolling('/api/detections', 500)
+  const { data } = usePolling('/api/detections', 1000)
 
   const detections = data || []
 

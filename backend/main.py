@@ -213,16 +213,28 @@ async def upload_video(file: UploadFile = File(...)) -> JSONResponse:
     try:
         # Re-initialize pipeline if it's not loaded yet
         if pipeline is None:
-            startup()
+            print("Pipeline is None, triggering manual startup...")
+            try:
+                startup()
+            except Exception as e:
+                print(f"Manual startup failed: {e}")
+                # Don't raise here, we might still be able to open the video
         
         camera = VideoFileCapture(UPLOADED_VIDEO_PATH)
         print(f"Uploaded video capture created. Pipeline state: {pipeline is not None}")
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=f"Cannot open uploaded video: {exc}")
+    except Exception as exc:
+        print(f"Error opening uploaded video: {exc}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Cannot open uploaded video: {str(exc)}"}
+        )
 
     if pipeline is not None and camera is not None:
-        start_inference()
-        print("Inference started for uploaded video.")
+        try:
+            start_inference()
+            print("Inference started for uploaded video.")
+        except Exception as e:
+            print(f"Error starting inference: {e}")
 
     return JSONResponse({"detail": "Video uploaded successfully. Inference will begin shortly."})
 
@@ -282,8 +294,15 @@ def health() -> JSONResponse:
         "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
     })
 
-# Mount static files last so they don't shadow API routes
+# --- Static File Serving ---
+
+@app.get("/")
+async def serve_index():
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        return Response(content=open(index_path, "rb").read(), media_type="text/html")
+    return Response(status_code=404, content="Frontend build not found.")
+
+# Mount other static files (assets, etc.)
 if os.path.isdir(STATIC_DIR):
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
-else:
-    print(f"WARNING: Static assets directory not found: {STATIC_DIR}")
+    app.mount("/", StaticFiles(directory=STATIC_DIR), name="static")

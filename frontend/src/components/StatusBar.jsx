@@ -1,7 +1,7 @@
 import { usePolling } from '../hooks/usePolling'
 
 export default function StatusBar() {
-  const { data, error } = usePolling('/api/health', 5000)
+  const { data, error } = usePolling('/api/health', 2000)
 
   const pipelineLoaded = data?.pipeline_loaded || false
   const cameraConnected = data?.camera_connected || false

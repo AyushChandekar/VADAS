@@ -12,6 +12,11 @@ export default function VideoUploader() {
       return
     }
 
+    if (file.size > 40 * 1024 * 1024) {
+      setMessage('File too large. Maximum size is 40MB.')
+      return
+    }
+
     const formData = new FormData()
     formData.append('file', file)
 

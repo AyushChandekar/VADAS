@@ -191,7 +191,12 @@ async def upload_video(file: UploadFile = File(...)) -> JSONResponse:
     if not file.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail="Only video files are accepted.")
 
+    # 40MB limit
+    MAX_SIZE = 40 * 1024 * 1024
     contents = await file.read()
+    if len(contents) > MAX_SIZE:
+        raise HTTPException(status_code=413, detail="File too large. Maximum size is 40MB.")
+
     try:
         with open(UPLOADED_VIDEO_PATH, "wb") as dest_file:
             dest_file.write(contents)

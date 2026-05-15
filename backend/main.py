@@ -113,6 +113,7 @@ def _inference_loop() -> None:
 
 app = FastAPI(title="VADAS-India API", version="1.0")
 
+# Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -120,10 +121,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-if os.path.isdir(STATIC_DIR):
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
-else:
-    print(f"WARNING: Static assets directory not found: {STATIC_DIR}")
+# --- Routes are defined below ---
 
 
 @app.on_event("startup")
@@ -269,3 +267,9 @@ def health() -> JSONResponse:
         "gpu_available": torch.cuda.is_available(),
         "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
     })
+
+# Mount static files last so they don't shadow API routes
+if os.path.isdir(STATIC_DIR):
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+else:
+    print(f"WARNING: Static assets directory not found: {STATIC_DIR}")

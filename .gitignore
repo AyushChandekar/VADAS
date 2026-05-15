@@ -8,6 +8,9 @@ build/
 venv/
 
 # ── Model weights (large binaries) ─────────────────────
+# Allow checkpoints folder but ignore generic weights elsewhere
+!backend/checkpoints/*.pth
+!backend/checkpoints/*.pt
 *.pth
 *.pt
 *.onnx

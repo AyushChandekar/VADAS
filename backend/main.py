@@ -104,7 +104,13 @@ def process_video_worker():
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        print(f"DEBUG: Video info: {width}x{height}, {fps} FPS, {total_frames} frames")
+        # Limit resolution for processing efficiency and web compatibility
+        TARGET_HEIGHT = 480
+        scale = TARGET_HEIGHT / height if height > TARGET_HEIGHT else 1.0
+        out_width = int(width * scale)
+        out_height = int(height * scale)
+        
+        print(f"DEBUG: Video info: {width}x{height} -> {out_width}x{out_height}, {fps} FPS, {total_frames} frames")
 
         # 3 second chunks (removed for simpler status tracking)
         processing_state["status"] = "PROCESSING"
@@ -118,8 +124,8 @@ def process_video_worker():
         # Robust VideoWriter initialization for different environments (HF/Local)
         # We try multiple codecs in order of preference
         codecs = [
+            ('mp4v', '.mp4'), # Standard MP4 (most compatible, avoids noisy H.264 hardware errors)
             ('avc1', '.mp4'), # H.264 (often requires OpenH264 or hardware)
-            ('mp4v', '.mp4'), # Standard MP4 (most compatible)
             ('XVID', '.avi'), # Very compatible but usually AVI
             ('MJPG', '.mp4')  # Fallback
         ]
@@ -131,7 +137,8 @@ def process_video_worker():
             try:
                 fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
                 test_path = output_path if ext == '.mp4' else output_path.replace('.mp4', ext)
-                out = cv2.VideoWriter(test_path, fourcc, current_fps, (width * 2, height))
+                # Side-by-side output: width is doubled
+                out = cv2.VideoWriter(test_path, fourcc, current_fps, (out_width * 2, out_height))
                 if out.isOpened():
                     print(f"DEBUG: Successfully initialized VideoWriter with codec {fourcc_str}")
                     if ext != '.mp4':
@@ -159,16 +166,19 @@ def process_video_worker():
                 print("DEBUG: End of video stream")
                 break
             
-            # Process frame with CPU optimization if needed
+            # Resize frame for processing if it's large
+            h, w = frame.shape[:2]
+            if scale < 1.0:
+                frame = cv2.resize(frame, (out_width, out_height))
+            
+            # Process frame
             if pipeline is not None:
-                if not is_gpu:
-                    h, w = frame.shape[:2]
-                    if w > 640:
-                        proc_frame = cv2.resize(frame, (640, int(h * (640 / w))))
-                        annotated = pipeline.process_frame(proc_frame)
-                        annotated = cv2.resize(annotated, (w, h))
-                    else:
-                        annotated = pipeline.process_frame(frame)
+                # If on CPU, further optimize if needed
+                if not is_gpu and out_width > 640:
+                    proc_scale = 640 / out_width
+                    proc_frame = cv2.resize(frame, (640, int(out_height * proc_scale)))
+                    annotated = pipeline.process_frame(proc_frame)
+                    annotated = cv2.resize(annotated, (out_width, out_height))
                 else:
                     annotated = pipeline.process_frame(frame)
             else:
@@ -178,9 +188,14 @@ def process_video_worker():
             # Add labels for clarity in the saved video
             f_label = frame.copy()
             a_label = annotated.copy()
-            cv2.putText(f_label, "ORIGINAL", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
-            cv2.putText(a_label, f"AI ANALYSIS {'(GPU)' if is_gpu else '(CPU)'}", (20, 50), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
+            
+            label_scale = out_height / 720 # Scale text based on resolution
+            thickness = max(1, int(2 * label_scale))
+            font_scale = max(0.5, 1.2 * label_scale)
+
+            cv2.putText(f_label, "ORIGINAL", (20, int(40 * label_scale)), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
+            cv2.putText(a_label, f"AI ANALYSIS {'(GPU)' if is_gpu else '(CPU)'}", (20, int(40 * label_scale)), 
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
             
             combined = np.hstack((f_label, a_label))
             out.write(combined)
@@ -315,46 +330,47 @@ async def stream_video():
         # Most HF Spaces are CPU-only unless paid
         is_gpu = pipeline is not None and pipeline.device == "cuda"
         
+        # Target height for streaming to save bandwidth and CPU
+        STREAM_TARGET_HEIGHT = 360
+        
         while True:
             t_start = time.time()
             ret, frame = cap.read()
             if not ret:
                 break
             
+            # Resize for efficiency before processing
+            h, w = frame.shape[:2]
+            stream_scale = STREAM_TARGET_HEIGHT / h if h > STREAM_TARGET_HEIGHT else 1.0
+            if stream_scale < 1.0:
+                frame = cv2.resize(frame, (int(w * stream_scale), STREAM_TARGET_HEIGHT))
+                h, w = frame.shape[:2]
+            
             # Process the frame
             if pipeline is not None:
-                # If on CPU, we might want to resize before processing to save time
-                if not is_gpu:
-                    h, w = frame.shape[:2]
-                    if w > 640:
-                        proc_frame = cv2.resize(frame, (640, int(h * (640 / w))))
-                        processed = pipeline.process_frame(proc_frame)
-                        # Resize back to match original for side-by-side
-                        processed = cv2.resize(processed, (w, h))
-                    else:
-                        processed = pipeline.process_frame(frame)
+                # If on CPU, we might want to resize further before processing to save time
+                if not is_gpu and w > 640:
+                    proc_scale = 640 / w
+                    proc_frame = cv2.resize(frame, (640, int(h * proc_scale)))
+                    processed = pipeline.process_frame(proc_frame)
+                    processed = cv2.resize(processed, (w, h))
                 else:
                     processed = pipeline.process_frame(frame)
             else:
                 processed = frame.copy()
             
             # Create a side-by-side comparison
-            h, w = frame.shape[:2]
-            
-            # Optimized labeling: draw directly on a stack if possible
-            # or just add labels to the combined image to save operations
             combined = np.hstack((frame, processed))
             
             # Add labels to the combined frame
-            cv2.putText(combined, "ORIGINAL", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
-            cv2.putText(combined, f"AI ANALYSIS {'(GPU)' if is_gpu else '(CPU)'}", (w + 20, 50), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
+            label_scale = h / 720
+            font_scale = max(0.5, 1.2 * label_scale)
+            thickness = max(1, int(2 * label_scale))
             
-            # Resize for bandwidth efficiency on web
-            if combined.shape[1] > 1280:
-                scale = 1280 / combined.shape[1]
-                combined = cv2.resize(combined, (0, 0), fx=scale, fy=scale)
-                
+            cv2.putText(combined, "ORIGINAL", (20, int(40 * label_scale)), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
+            cv2.putText(combined, f"AI ANALYSIS {'(GPU)' if is_gpu else '(CPU)'}", (w + 20, int(40 * label_scale)), 
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
+            
             _, buffer = cv2.imencode('.jpg', combined, [cv2.IMWRITE_JPEG_QUALITY, 75])
             
             yield (b'--frame\r\n'

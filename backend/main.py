@@ -298,6 +298,43 @@ def get_processed_video():
         return FileResponse(PROCESSED_VIDEO_PATH, media_type="video/mp4")
     return Response(status_code=404)
 
+@app.get("/api/stream")
+async def stream_video():
+    path = UPLOADED_VIDEO_PATH
+    if not os.path.exists(path):
+        path = "/tmp/uploaded_video.mp4"
+    
+    if not os.path.exists(path):
+        return Response(status_code=404)
+    
+    def generate():
+        cap = cv2.VideoCapture(path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        delay = 1.0 / fps
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Process the frame in real-time (uses GPU if available)
+            if pipeline is not None:
+                processed = pipeline.process_frame(frame)
+            else:
+                processed = frame
+                
+            _, buffer = cv2.imencode('.jpg', processed)
+            
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
+            # Control speed to match original video
+            time.sleep(delay * 0.1) 
+            
+        cap.release()
+
+    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
+
 @app.get("/api/health")
 def health() -> JSONResponse:
     import torch
@@ -306,6 +343,39 @@ def health() -> JSONResponse:
         "pipeline_loaded": pipeline is not None,
         "gpu_available": torch.cuda.is_available(),
     })
+
+@app.get("/api/stream")
+async def stream_video():
+    if not os.path.exists(UPLOADED_VIDEO_PATH):
+        return Response(status_code=404)
+    
+    def generate():
+        cap = cv2.VideoCapture(UPLOADED_VIDEO_PATH)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        delay = 1.0 / fps
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Process the frame in real-time (uses GPU if available)
+            if pipeline is not None:
+                processed = pipeline.process_frame(frame)
+            else:
+                processed = frame
+                
+            _, buffer = cv2.imencode('.jpg', processed)
+            
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
+            # Control speed
+            time.sleep(delay * 0.1) # Aggressive speed for real-time feel
+            
+        cap.release()
+
+    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 # --- Static File Serving ---
 @app.get("/")

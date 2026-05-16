@@ -8,36 +8,19 @@ export default function App() {
   const { data: procStatus } = usePolling('/api/process/status', appState === 'PROCESSING' ? 1000 : 5000)
   
   const videoRef1 = useRef(null)
-  const videoRef2 = useRef(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
-
-  // Sync state based on backend status
-  useEffect(() => {
-    if (procStatus?.status === 'PROCESSING') {
-      setAppState('PROCESSING')
-    } else if (procStatus?.status === 'COMPLETED') {
-      setAppState('COMPLETED')
-    } else if (procStatus?.status === 'ERROR') {
-      alert(`Processing error: ${procStatus.error}`)
-      setAppState('IDLE')
-    }
-  }, [procStatus])
+  const [isStreaming, setIsStreaming] = useState(false)
 
   const handleUploadSuccess = () => {
     setAppState('UPLOADED')
   }
 
   const startProcessing = async () => {
-    try {
-      const res = await fetch('/api/process', { method: 'POST' })
-      if (res.ok) {
-        setAppState('PROCESSING')
-      }
-    } catch (err) {
-      console.error('Failed to start processing:', err)
-    }
+    setAppState('PROCESSING')
+    setIsStreaming(true)
+    videoRef1.current?.play()
   }
 
   // Dual Player Sync Logic
@@ -46,20 +29,16 @@ export default function App() {
     setIsPlaying(nextPlay)
     if (nextPlay) {
       videoRef1.current?.play()
-      videoRef2.current?.play()
+      setIsStreaming(true)
     } else {
       videoRef1.current?.pause()
-      videoRef2.current?.pause()
+      setIsStreaming(false)
     }
   }
 
   const handleTimeUpdate = () => {
     if (videoRef1.current) {
       setCurrentTime(videoRef1.current.currentTime)
-      // Tight sync for the second player
-      if (videoRef2.current && Math.abs(videoRef1.current.currentTime - videoRef2.current.currentTime) > 0.1) {
-        videoRef2.current.currentTime = videoRef1.current.currentTime
-      }
     }
   }
 
@@ -67,7 +46,9 @@ export default function App() {
     const time = parseFloat(e.target.value)
     setCurrentTime(time)
     if (videoRef1.current) videoRef1.current.currentTime = time
-    if (videoRef2.current) videoRef2.current.currentTime = time
+    // Reset stream on seek
+    setIsStreaming(false)
+    setTimeout(() => setIsStreaming(true), 100)
   }
 
   return (
@@ -101,60 +82,24 @@ export default function App() {
             </div>
             <h2 className="text-2xl font-bold mb-3 text-green-400">Video Uploaded!</h2>
             <p className="text-gray-400 mb-10 text-sm leading-relaxed">
-              Your video is stored on the server. Ready to analyze road segments, 
-              detect objects, and calculate the path trajectory.
+              Ready for real-time AI analysis.
             </p>
             <button
               onClick={startProcessing}
               className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 rounded-2xl font-black text-xl transition-all transform hover:scale-[1.02] active:scale-95 shadow-xl shadow-indigo-600/20 flex items-center justify-center gap-3"
             >
               <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-              Start AI Processing
+              Start Real-Time Analysis
             </button>
           </div>
         )}
 
-        {appState === 'PROCESSING' && (
-          <div className="bg-gray-900/50 p-10 rounded-3xl shadow-2xl border border-gray-800/50 text-center max-w-xl mx-auto backdrop-blur-sm animate-in zoom-in duration-500">
-            <h2 className="text-2xl font-bold mb-6">AI Analyzing Road Conditions</h2>
-            <div className="space-y-6">
-              <div className="w-full bg-gray-800 h-6 rounded-full overflow-hidden shadow-inner p-1">
-                <div 
-                  className="bg-gradient-to-r from-indigo-600 to-blue-500 h-full rounded-full transition-all duration-700 relative overflow-hidden" 
-                  style={{ width: `${procStatus?.progress || 0}%` }}
-                >
-                   <div className="absolute inset-0 bg-white/20 animate-pulse" />
-                </div>
-              </div>
-              <div className="flex justify-between items-end">
-                <div className="text-left">
-                  <p className="text-gray-400 text-xs uppercase font-bold tracking-widest mb-1">Status</p>
-                  <p className="text-indigo-400 font-mono text-lg font-bold">
-                    Chunk {procStatus?.current_chunk + 1} of {procStatus?.total_chunks}
-                  </p>
-                </div>
-                <div className="text-right">
-                   <p className="text-gray-400 text-xs uppercase font-bold tracking-widest mb-1">Progress</p>
-                   <p className="text-white font-mono text-3xl font-black">{procStatus?.progress || 0}%</p>
-                </div>
-              </div>
-            </div>
-            <div className="mt-10 p-4 bg-gray-800/30 rounded-xl border border-gray-700/30">
-               <p className="text-gray-500 text-xs leading-relaxed">
-                 Processing in 3-second segments: Running YOLOv8 (Objects), U-Net (Segmentation), 
-                 and GRU-based Path Trajectory models.
-               </p>
-            </div>
-          </div>
-        )}
-
-        {appState === 'COMPLETED' && (
+        {(appState === 'PROCESSING' || appState === 'COMPLETED') && (
           <div className="space-y-8 animate-in fade-in duration-1000">
             <div className="grid lg:grid-cols-2 gap-6">
               <div className="group space-y-3">
                 <div className="flex items-center justify-between px-2">
                   <span className="text-xs font-black text-gray-500 uppercase tracking-[0.2em]">Original Stream</span>
-                  <span className="text-[10px] font-mono text-gray-600">SOURCE_MP4_RAW</span>
                 </div>
                 <div className="aspect-video bg-black rounded-3xl overflow-hidden border border-gray-800 shadow-2xl group-hover:border-gray-700 transition-colors">
                   <video 
@@ -171,15 +116,18 @@ export default function App() {
               
               <div className="group space-y-3">
                 <div className="flex items-center justify-between px-2">
-                  <span className="text-xs font-black text-indigo-500 uppercase tracking-[0.2em]">AI Enhanced Analysis</span>
-                   <span className="text-[10px] font-mono text-indigo-500/50">VADAS_PROCESSED_OUTPUT</span>
+                  <span className="text-xs font-black text-indigo-500 uppercase tracking-[0.2em]">AI Real-Time Analysis</span>
                 </div>
-                <div className="aspect-video bg-black rounded-3xl overflow-hidden border border-indigo-500/20 shadow-2xl shadow-indigo-500/5 group-hover:border-indigo-500/40 transition-colors">
-                  <video 
-                    ref={videoRef2}
-                    src="/api/video/processed" 
-                    className="w-full h-full object-contain"
-                  />
+                <div className="aspect-video bg-black rounded-3xl overflow-hidden border border-indigo-500/20 shadow-2xl shadow-indigo-500/5 group-hover:border-indigo-500/40 transition-colors flex items-center justify-center">
+                  {isStreaming ? (
+                    <img 
+                      src={`/api/stream?t=${currentTime}`} 
+                      className="w-full h-full object-contain"
+                      alt="AI Analysis"
+                    />
+                  ) : (
+                    <div className="text-gray-600 animate-pulse font-mono uppercase tracking-widest text-xs">Waiting for stream...</div>
+                  )}
                 </div>
               </div>
             </div>
@@ -214,9 +162,9 @@ export default function App() {
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                     />
                   </div>
-                  <div className="flex justify-between items-center text-[11px] font-mono font-bold text-gray-500 tracking-tighter">
+                    <div className="flex justify-between items-center text-[11px] font-mono font-bold text-gray-500 tracking-tighter">
                     <span className="text-gray-300">{formatTime(currentTime)}</span>
-                    <span className="bg-gray-800 px-2 py-0.5 rounded text-gray-400">SYNC_LOCKED</span>
+                    <span className="bg-gray-800 px-2 py-0.5 rounded text-gray-400">AI_STREAM_ACTIVE</span>
                     <span>{formatTime(duration)}</span>
                   </div>
                 </div>
@@ -224,7 +172,7 @@ export default function App() {
                 <div className="h-10 w-px bg-gray-800 mx-2" />
 
                 <button 
-                  onClick={() => setAppState('IDLE')}
+                  onClick={() => {setAppState('IDLE'); setIsStreaming(false);}}
                   className="px-6 py-3 text-xs font-black text-gray-500 hover:text-white hover:bg-white/5 rounded-2xl transition-all uppercase tracking-widest"
                 >
                   Reset

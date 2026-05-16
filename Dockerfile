@@ -43,11 +43,8 @@ WORKDIR /home/user/app
 # Copy dependency files first for caching
 COPY --chown=user pyproject.toml ./
 
-# Install torch CPU version first (large dependency)
-RUN pip install --user --extra-index-url https://download.pytorch.org/whl/cpu torch torchvision
-
 # Install project dependencies
-RUN pip install --user .
+RUN pip install --user . torch torchvision
 
 # Copy backend and other files
 COPY --chown=user backend ./backend

@@ -114,22 +114,33 @@ def _inference_loop() -> None:
 
 def process_video_worker():
     global processing_state, pipeline, PROCESSED_VIDEO_PATH, UPLOADED_VIDEO_PATH
+    print(f"DEBUG: Worker started. Source: {UPLOADED_VIDEO_PATH}")
     try:
         source_path = UPLOADED_VIDEO_PATH
         if not os.path.exists(source_path):
             source_path = "/tmp/uploaded_video.mp4"
+            print(f"DEBUG: Falling back to {source_path}")
             
         if not os.path.exists(source_path):
+            print(f"ERROR: Video not found at {source_path}")
             processing_state["status"] = "ERROR"
             processing_state["error"] = "Original video not found"
             return
 
         cap = cv2.VideoCapture(source_path)
+        if not cap.isOpened():
+            print(f"ERROR: Could not open video file {source_path}")
+            processing_state["status"] = "ERROR"
+            processing_state["error"] = "Failed to open video file"
+            return
+
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
+        print(f"DEBUG: Video info: {width}x{height}, {fps} FPS, {total_frames} frames")
+
         # 3 second chunks
         frames_per_chunk = int(fps * 3)
         total_chunks = (total_frames + frames_per_chunk - 1) // frames_per_chunk
@@ -144,24 +155,29 @@ def process_video_worker():
         output_path = PROCESSED_VIDEO_PATH
         try:
             with open(output_path, "wb") as f: pass
+            print(f"DEBUG: Writing to {output_path}")
         except:
             output_path = "/tmp/processed_video.mp4"
             PROCESSED_VIDEO_PATH = output_path
+            print(f"DEBUG: Writing to fallback {output_path}")
 
         fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        if not out.isOpened():
+            print("ERROR: Could not open VideoWriter")
+            processing_state["status"] = "ERROR"
+            processing_state["error"] = "Failed to initialize video encoder"
+            return
 
         if pipeline is None:
-            # Re-init pipeline if needed
-            yolo_path = os.path.join(CHECKPOINT_DIR, "yolo_idd_best.pt")
-            unet_path = os.path.join(CHECKPOINT_DIR, "unet_drivable_best.pth")
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            pipeline = InferencePipeline(yolo_path, unet_path, device=device)
+            print("DEBUG: Re-initializing pipeline...")
+            startup()
 
+        print("DEBUG: Starting frame loop...")
         while True:
             ret, frame = cap.read()
             if not ret:
+                print("DEBUG: End of video stream")
                 break
             
             # Process frame
@@ -181,10 +197,10 @@ def process_video_worker():
         out.release()
         processing_state["status"] = "COMPLETED"
         processing_state["progress"] = 100
-        print(f"Processing completed: {output_path}")
+        print(f"Processing completed successfully: {output_path}")
 
     except Exception as e:
-        print(f"Processing error: {e}")
+        print(f"CRITICAL: Processing worker crashed: {e}")
         import traceback
         traceback.print_exc()
         processing_state["status"] = "ERROR"

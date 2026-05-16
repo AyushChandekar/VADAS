@@ -48,6 +48,15 @@ class ObjectDetector:
         self.conf = conf
         self.iou = iou
         self.imgsz = imgsz
+        
+        # Move to device and potentially fuse
+        try:
+            self.model.to(self.device)
+            # Pre-fuse the model to catch errors early and avoid per-frame fusion attempts
+            # Some versions of ultralytics have issues with 'bn' attribute during fusion on CPU
+            self.model.fuse()
+        except Exception as e:
+            print(f"Warning: Model fusion or device move failed: {e}. Continuing without manual fusion.")
 
     def predict(self, frame_bgr: np.ndarray) -> list[Detection]:
         """

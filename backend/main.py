@@ -15,6 +15,9 @@ from fastapi.staticfiles import StaticFiles
 # Add backend/ to path so internal imports resolve
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Fix Ultralytics config directory for Hugging Face
+os.environ["YOLO_CONFIG_DIR"] = "/tmp"
+
 from inference.camera import CameraCapture, VideoFileCapture
 from inference.pipeline import InferencePipeline
 
@@ -112,15 +115,33 @@ def process_video_worker():
         output_path = PROCESSED_VIDEO_PATH
         print(f"DEBUG: Writing to {output_path}")
 
-        fourcc = cv2.VideoWriter_fourcc(*'avc1') 
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width * 2, height))
-        if not out.isOpened():
-            print("DEBUG: Failed to open with avc1, trying mp4v")
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
-            out = cv2.VideoWriter(output_path, fourcc, fps, (width * 2, height))
+        # Robust VideoWriter initialization for different environments (HF/Local)
+        # We try multiple codecs in order of preference
+        codecs = [
+            ('avc1', '.mp4'), # H.264 (often requires OpenH264 or hardware)
+            ('mp4v', '.mp4'), # Standard MP4 (most compatible)
+            ('XVID', '.avi'), # Very compatible but usually AVI
+            ('MJPG', '.mp4')  # Fallback
+        ]
+        
+        out = None
+        current_fps = fps
+        
+        for fourcc_str, ext in codecs:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
+                test_path = output_path if ext == '.mp4' else output_path.replace('.mp4', ext)
+                out = cv2.VideoWriter(test_path, fourcc, current_fps, (width * 2, height))
+                if out.isOpened():
+                    print(f"DEBUG: Successfully initialized VideoWriter with codec {fourcc_str}")
+                    if ext != '.mp4':
+                        PROCESSED_VIDEO_PATH = test_path
+                    break
+            except Exception as e:
+                print(f"DEBUG: Failed to initialize codec {fourcc_str}: {e}")
             
-        if not out.isOpened():
-            print("ERROR: Could not open VideoWriter")
+        if out is None or not out.isOpened():
+            print("ERROR: Could not open VideoWriter with any codec")
             processing_state["status"] = "ERROR"
             processing_state["error"] = "Failed to initialize video encoder"
             return

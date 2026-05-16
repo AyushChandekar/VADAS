@@ -223,6 +223,7 @@ def startup() -> None:
 
 @app.post("/api/upload_video")
 async def upload_video(file: UploadFile = File(...)) -> JSONResponse:
+    global UPLOADED_VIDEO_PATH
     try:
         if not file.content_type.startswith("video/"):
             return JSONResponse(status_code=400, content={"detail": "Only video files are accepted."})
@@ -242,7 +243,6 @@ async def upload_video(file: UploadFile = File(...)) -> JSONResponse:
             with open(save_path, "wb") as f:
                 f.write(contents)
         
-        global UPLOADED_VIDEO_PATH
         UPLOADED_VIDEO_PATH = save_path
         return JSONResponse({"detail": "Video uploaded successfully."})
     except Exception as e:

@@ -66,7 +66,7 @@ class PathGuidancePlanner:
                 best_x = np.argmax(row_dist)
                 raw_path.append((int(best_x), int(y)))
 
-        if not raw_path or len(raw_path) < 3:
+        if not raw_path or len(raw_path) < 4:
             return self._empty_response(h, w)
 
         # 3. Temporal Smoothing (Sequence Logic)
@@ -92,7 +92,7 @@ class PathGuidancePlanner:
         }
 
     def _interpolate_path(self, points):
-        """Increase point density and smooth using cubic interpolation."""
+        """Increase point density and smooth using interpolation."""
         points = np.array(points)
         x = points[:, 0]
         y = points[:, 1]
@@ -103,8 +103,17 @@ class PathGuidancePlanner:
         t = np.linspace(0, 1, len(points))
         t_new = np.linspace(0, 1, 30) # Increase to 30 points for smooth stroke
         
-        fx = interp1d(t, x, kind='cubic')
-        fy = interp1d(t, y, kind='cubic')
+        # Choose interpolation kind based on number of points to avoid SciPy errors
+        n = len(points)
+        if n >= 4:
+            kind = 'cubic'
+        elif n == 3:
+            kind = 'quadratic'
+        else:
+            kind = 'linear'
+
+        fx = interp1d(t, x, kind=kind)
+        fy = interp1d(t, y, kind=kind)
         
         interp_points = []
         for i in range(len(t_new)):

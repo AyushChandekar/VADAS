@@ -11,7 +11,13 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
-  const [isStreaming, setIsStreaming] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  useEffect(() => {
+    if (procStatus?.status === 'COMPLETED' && appState === 'PROCESSING') {
+      setAppState('COMPLETED')
+    }
+  }, [procStatus, appState])
 
   const handleUploadSuccess = () => {
     setAppState('UPLOADED')
@@ -19,8 +25,11 @@ export default function App() {
 
   const startProcessing = async () => {
     setAppState('PROCESSING')
-    setIsStreaming(true)
-    videoRef1.current?.play()
+    try {
+      await fetch('/api/process', { method: 'POST' })
+    } catch (err) {
+      console.error("Failed to start processing", err)
+    }
   }
 
   // Dual Player Sync Logic
@@ -29,10 +38,8 @@ export default function App() {
     setIsPlaying(nextPlay)
     if (nextPlay) {
       videoRef1.current?.play()
-      setIsStreaming(true)
     } else {
       videoRef1.current?.pause()
-      setIsStreaming(false)
     }
   }
 
@@ -46,9 +53,6 @@ export default function App() {
     const time = parseFloat(e.target.value)
     setCurrentTime(time)
     if (videoRef1.current) videoRef1.current.currentTime = time
-    // Reset stream on seek
-    setIsStreaming(false)
-    setTimeout(() => setIsStreaming(true), 100)
   }
 
   return (
@@ -82,53 +86,79 @@ export default function App() {
             </div>
             <h2 className="text-2xl font-bold mb-3 text-green-400">Video Uploaded!</h2>
             <p className="text-gray-400 mb-10 text-sm leading-relaxed">
-              Ready for real-time AI analysis.
+              Ready for AI analysis. Click below to process the entire video.
             </p>
             <button
               onClick={startProcessing}
               className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 rounded-2xl font-black text-xl transition-all transform hover:scale-[1.02] active:scale-95 shadow-xl shadow-indigo-600/20 flex items-center justify-center gap-3"
             >
               <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-              Start Real-Time Analysis
+              Start AI Processing
             </button>
           </div>
         )}
 
-        {(appState === 'PROCESSING' || appState === 'COMPLETED') && (
-          <div className="space-y-8 animate-in fade-in duration-1000">
-            <div className="grid lg:grid-cols-2 gap-6">
-              <div className="group space-y-3">
-                <div className="flex items-center justify-between px-2">
-                  <span className="text-xs font-black text-gray-500 uppercase tracking-[0.2em]">Original Stream</span>
+        {appState === 'PROCESSING' && (
+          <div className="space-y-6 animate-in zoom-in duration-500">
+            <div className="bg-gray-900/50 p-6 rounded-3xl shadow-2xl border border-gray-800/50 backdrop-blur-sm max-w-5xl mx-auto">
+              <div className="flex items-center justify-between mb-4 px-2">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                  <span className="text-xs font-black text-gray-400 uppercase tracking-widest">Live AI Analysis Stream</span>
                 </div>
-                <div className="aspect-video bg-black rounded-3xl overflow-hidden border border-gray-800 shadow-2xl group-hover:border-gray-700 transition-colors">
-                  <video 
-                    ref={videoRef1}
-                    src="/api/video/original" 
-                    className="w-full h-full object-contain"
-                    onTimeUpdate={handleTimeUpdate}
-                    onLoadedMetadata={(e) => setDuration(e.target.duration)}
-                    onPlay={() => setIsPlaying(true)}
-                    onPause={() => setIsPlaying(false)}
-                  />
+                <div className="text-xs font-mono text-indigo-400">
+                  {procStatus?.current_frame || 0} / {procStatus?.total_frames || 0} FRAMES
                 </div>
               </div>
               
-              <div className="group space-y-3">
-                <div className="flex items-center justify-between px-2">
-                  <span className="text-xs font-black text-indigo-500 uppercase tracking-[0.2em]">AI Real-Time Analysis</span>
+              <div className="aspect-[21/9] bg-black rounded-2xl overflow-hidden border border-gray-800 shadow-inner mb-6">
+                <img 
+                  src="/api/stream" 
+                  className="w-full h-full object-contain" 
+                  alt="Live Analysis"
+                  onError={(e) => {
+                    e.target.src = "https://via.placeholder.com/1280x720?text=Waiting+for+stream...";
+                  }}
+                />
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex justify-between items-end">
+                  <div className="space-y-1">
+                    <h2 className="text-xl font-bold">Processing Video...</h2>
+                    <p className="text-gray-500 text-xs">AI is analyzing every frame. Don't close this window.</p>
+                  </div>
+                  <div className="text-2xl font-black text-indigo-500">{procStatus?.progress || 0}%</div>
                 </div>
-                <div className="aspect-video bg-black rounded-3xl overflow-hidden border border-indigo-500/20 shadow-2xl shadow-indigo-500/5 group-hover:border-indigo-500/40 transition-colors flex items-center justify-center">
-                  {isStreaming ? (
-                    <img 
-                      src={`/api/stream?t=${currentTime}`} 
-                      className="w-full h-full object-contain"
-                      alt="AI Analysis"
-                    />
-                  ) : (
-                    <div className="text-gray-600 animate-pulse font-mono uppercase tracking-widest text-xs">Waiting for stream...</div>
-                  )}
+                
+                <div className="w-full bg-gray-800 rounded-full h-3 overflow-hidden">
+                  <div 
+                    className="bg-gradient-to-r from-indigo-600 to-blue-500 h-full transition-all duration-500 ease-out" 
+                    style={{ width: `${procStatus?.progress || 0}%` }}
+                  ></div>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {appState === 'COMPLETED' && (
+          <div className="space-y-8 animate-in fade-in duration-1000">
+            <div className="group space-y-3">
+              <div className="flex items-center justify-between px-2">
+                <span className="text-xs font-black text-indigo-500 uppercase tracking-[0.2em]">Synchronized Analysis Result</span>
+                <span className="text-[10px] text-gray-500 font-mono">2x WIDE VIEW</span>
+              </div>
+              <div className="aspect-[21/9] bg-black rounded-[2rem] overflow-hidden border border-gray-800 shadow-2xl group-hover:border-indigo-500/30 transition-all duration-500">
+                <video 
+                  ref={videoRef1}
+                  src="/api/video/processed" 
+                  className="w-full h-full object-contain"
+                  onTimeUpdate={handleTimeUpdate}
+                  onLoadedMetadata={(e) => setDuration(e.target.duration)}
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
+                />
               </div>
             </div>
 
@@ -164,7 +194,7 @@ export default function App() {
                   </div>
                     <div className="flex justify-between items-center text-[11px] font-mono font-bold text-gray-500 tracking-tighter">
                     <span className="text-gray-300">{formatTime(currentTime)}</span>
-                    <span className="bg-gray-800 px-2 py-0.5 rounded text-gray-400">AI_STREAM_ACTIVE</span>
+                    <span className="bg-gray-800 px-2 py-0.5 rounded text-gray-400">SYNCED_PLAYBACK_ACTIVE</span>
                     <span>{formatTime(duration)}</span>
                   </div>
                 </div>
@@ -172,7 +202,7 @@ export default function App() {
                 <div className="h-10 w-px bg-gray-800 mx-2" />
 
                 <button 
-                  onClick={() => {setAppState('IDLE'); setIsStreaming(false);}}
+                  onClick={() => {setAppState('IDLE'); setIsPlaying(false);}}
                   className="px-6 py-3 text-xs font-black text-gray-500 hover:text-white hover:bg-white/5 rounded-2xl transition-all uppercase tracking-widest"
                 >
                   Reset

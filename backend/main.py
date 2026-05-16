@@ -22,21 +22,29 @@ from inference.pipeline import InferencePipeline
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 CHECKPOINT_DIR = os.path.join(BACKEND_DIR, "checkpoints")
-UPLOADED_VIDEO_PATH = os.path.join(ROOT_DIR, "uploaded_video.mp4")
-PROCESSED_VIDEO_PATH = os.path.join(ROOT_DIR, "processed_video.mp4")
+
+# Hugging Face specific path handling
+def get_safe_path(filename):
+    # Prefer /tmp if on HF (indicated by lack of write permissions in ROOT_DIR or specific env vars)
+    if os.environ.get("SPACE_ID"):
+        return os.path.join("/tmp", filename)
+    try:
+        test_file = os.path.join(ROOT_DIR, ".test_write")
+        with open(test_file, "w") as f: f.write("test")
+        os.remove(test_file)
+        return os.path.join(ROOT_DIR, filename)
+    except:
+        return os.path.join("/tmp", filename)
+
+UPLOADED_VIDEO_PATH = get_safe_path("uploaded_video.mp4")
+PROCESSED_VIDEO_PATH = get_safe_path("processed_video.mp4")
 STATIC_DIR = os.path.join(ROOT_DIR, "frontend", "dist")
 
 # --- Global State ---
 pipeline: InferencePipeline | None = None
-camera: CameraCapture | None = None
-inference_thread: threading.Thread | None = None
-running = False
-
 processing_state = {
     "status": "IDLE", # IDLE, PROCESSING, COMPLETED, ERROR
     "progress": 0,
-    "current_chunk": 0,
-    "total_chunks": 0,
     "current_frame": 0,
     "total_frames": 0,
     "error": None
@@ -63,52 +71,6 @@ def resolve_checkpoint(path: str, env_var: str, friendly_name: str) -> str:
         return path
     print(f"WARNING: {friendly_name} not found at {path}")
     return path
-
-def create_capture(source: str | int) -> CameraCapture:
-    if isinstance(source, str):
-        if os.path.exists(source):
-            return VideoFileCapture(source)
-        if source.isdigit() or (source.startswith("-") and source[1:].isdigit()):
-            return CameraCapture(int(source))
-        return CameraCapture(source)
-    return CameraCapture(source)
-
-def stop_camera() -> None:
-    global camera
-    if camera is not None:
-        try:
-            camera.release()
-        except Exception:
-            pass
-    camera = None
-
-def stop_inference() -> None:
-    global running, inference_thread
-    running = False
-    if inference_thread is not None and inference_thread.is_alive():
-        inference_thread.join(timeout=2.0)
-
-def start_inference() -> None:
-    global inference_thread, running
-    if pipeline is None or camera is None:
-        return
-    if inference_thread is not None and inference_thread.is_alive():
-        return
-    running = True
-    inference_thread = threading.Thread(target=_inference_loop, daemon=True)
-    inference_thread.start()
-
-def _inference_loop() -> None:
-    global running
-    while running:
-        try:
-            frame = camera.get_latest_frame()
-            if frame is not None:
-                pipeline.process_frame(frame)
-            else:
-                time.sleep(0.05)
-        except Exception as e:
-            time.sleep(0.5)
 
 # --- Video Processing Worker ---
 
@@ -141,28 +103,22 @@ def process_video_worker():
         
         print(f"DEBUG: Video info: {width}x{height}, {fps} FPS, {total_frames} frames")
 
-        # 3 second chunks
-        frames_per_chunk = int(fps * 3)
-        total_chunks = (total_frames + frames_per_chunk - 1) // frames_per_chunk
-
+        # 3 second chunks (removed for simpler status tracking)
         processing_state["status"] = "PROCESSING"
         processing_state["total_frames"] = total_frames
-        processing_state["total_chunks"] = total_chunks
         processing_state["current_frame"] = 0
-        processing_state["current_chunk"] = 0
 
         # Output path check
         output_path = PROCESSED_VIDEO_PATH
-        try:
-            with open(output_path, "wb") as f: pass
-            print(f"DEBUG: Writing to {output_path}")
-        except:
-            output_path = "/tmp/processed_video.mp4"
-            PROCESSED_VIDEO_PATH = output_path
-            print(f"DEBUG: Writing to fallback {output_path}")
+        print(f"DEBUG: Writing to {output_path}")
 
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        fourcc = cv2.VideoWriter_fourcc(*'avc1') 
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width * 2, height))
+        if not out.isOpened():
+            print("DEBUG: Failed to open with avc1, trying mp4v")
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
+            out = cv2.VideoWriter(output_path, fourcc, fps, (width * 2, height))
+            
         if not out.isOpened():
             print("ERROR: Could not open VideoWriter")
             processing_state["status"] = "ERROR"
@@ -174,24 +130,43 @@ def process_video_worker():
             startup()
 
         print("DEBUG: Starting frame loop...")
+        is_gpu = pipeline is not None and pipeline.device == "cuda"
+        
         while True:
             ret, frame = cap.read()
             if not ret:
                 print("DEBUG: End of video stream")
                 break
             
-            # Process frame
-            annotated = pipeline.process_frame(frame)
-            out.write(annotated)
+            # Process frame with CPU optimization if needed
+            if pipeline is not None:
+                if not is_gpu:
+                    h, w = frame.shape[:2]
+                    if w > 640:
+                        proc_frame = cv2.resize(frame, (640, int(h * (640 / w))))
+                        annotated = pipeline.process_frame(proc_frame)
+                        annotated = cv2.resize(annotated, (w, h))
+                    else:
+                        annotated = pipeline.process_frame(frame)
+                else:
+                    annotated = pipeline.process_frame(frame)
+            else:
+                annotated = frame.copy()
+            
+            # Create side-by-side combined frame for the final video
+            # Add labels for clarity in the saved video
+            f_label = frame.copy()
+            a_label = annotated.copy()
+            cv2.putText(f_label, "ORIGINAL", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
+            cv2.putText(a_label, f"AI ANALYSIS {'(GPU)' if is_gpu else '(CPU)'}", (20, 50), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
+            
+            combined = np.hstack((f_label, a_label))
+            out.write(combined)
 
             processing_state["current_frame"] += 1
-            processing_state["progress"] = int((processing_state["current_frame"] / total_frames) * 100)
-            
-            # Update chunk status
-            new_chunk = (processing_state["current_frame"] // frames_per_chunk)
-            if new_chunk != processing_state["current_chunk"]:
-                processing_state["current_chunk"] = new_chunk
-                print(f"Processed chunk {new_chunk}/{total_chunks}")
+            if processing_state["current_frame"] % 5 == 0: # Update progress every 5 frames to reduce overhead
+                processing_state["progress"] = int((processing_state["current_frame"] / total_frames) * 100)
 
         cap.release()
         out.release()
@@ -219,7 +194,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup() -> None:
-    global pipeline, camera
+    global pipeline
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     yolo_path = resolve_checkpoint(
         os.path.join(CHECKPOINT_DIR, "yolo_idd_best.pt"),
@@ -239,7 +214,7 @@ def startup() -> None:
 
 @app.post("/api/upload_video")
 async def upload_video(file: UploadFile = File(...)) -> JSONResponse:
-    global UPLOADED_VIDEO_PATH
+    global UPLOADED_VIDEO_PATH, PROCESSED_VIDEO_PATH
     try:
         if not file.content_type.startswith("video/"):
             return JSONResponse(status_code=400, content={"detail": "Only video files are accepted."})
@@ -248,18 +223,19 @@ async def upload_video(file: UploadFile = File(...)) -> JSONResponse:
         if len(contents) > MAX_SIZE:
             return JSONResponse(status_code=413, content={"detail": "File too large. Maximum size is 40MB."})
 
-        save_path = UPLOADED_VIDEO_PATH
-        try:
-            with open(save_path, "wb") as f:
-                f.write(contents)
-                f.flush()
-                os.fsync(f.fileno())
-        except:
-            save_path = "/tmp/uploaded_video.mp4"
-            with open(save_path, "wb") as f:
-                f.write(contents)
+        # Ensure we have fresh paths
+        UPLOADED_VIDEO_PATH = get_safe_path("uploaded_video.mp4")
+        PROCESSED_VIDEO_PATH = get_safe_path("processed_video.mp4")
         
-        UPLOADED_VIDEO_PATH = save_path
+        # Cleanup old processed video if it exists
+        if os.path.exists(PROCESSED_VIDEO_PATH):
+            os.remove(PROCESSED_VIDEO_PATH)
+
+        with open(UPLOADED_VIDEO_PATH, "wb") as f:
+            f.write(contents)
+            f.flush()
+            os.fsync(f.fileno())
+        
         return JSONResponse({"detail": "Video uploaded successfully."})
     except Exception as e:
         return JSONResponse(status_code=500, content={"detail": str(e)})
@@ -273,8 +249,6 @@ async def start_processing(background_tasks: BackgroundTasks):
     processing_state = {
         "status": "IDLE",
         "progress": 0,
-        "current_chunk": 0,
-        "total_chunks": 0,
         "current_frame": 0,
         "total_frames": 0,
         "error": None
@@ -289,13 +263,13 @@ def get_processing_status():
 @app.get("/api/video/original")
 def get_original_video():
     if os.path.exists(UPLOADED_VIDEO_PATH):
-        return FileResponse(UPLOADED_VIDEO_PATH, media_type="video/mp4")
+        return FileResponse(UPLOADED_VIDEO_PATH, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
     return Response(status_code=404)
 
 @app.get("/api/video/processed")
 def get_processed_video():
     if os.path.exists(PROCESSED_VIDEO_PATH):
-        return FileResponse(PROCESSED_VIDEO_PATH, media_type="video/mp4")
+        return FileResponse(PROCESSED_VIDEO_PATH, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
     return Response(status_code=404)
 
 @app.get("/api/stream")
@@ -309,27 +283,66 @@ async def stream_video():
     
     def generate():
         cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            print(f"ERROR: Could not open video for streaming: {path}")
+            return
+
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
-        delay = 1.0 / fps
+        frame_delay = 1.0 / fps
+        
+        # Limit processing resolution for HF CPU efficiency if needed
+        # Most HF Spaces are CPU-only unless paid
+        is_gpu = pipeline is not None and pipeline.device == "cuda"
         
         while True:
+            t_start = time.time()
             ret, frame = cap.read()
             if not ret:
                 break
             
-            # Process the frame in real-time (uses GPU if available)
+            # Process the frame
             if pipeline is not None:
-                processed = pipeline.process_frame(frame)
+                # If on CPU, we might want to resize before processing to save time
+                if not is_gpu:
+                    h, w = frame.shape[:2]
+                    if w > 640:
+                        proc_frame = cv2.resize(frame, (640, int(h * (640 / w))))
+                        processed = pipeline.process_frame(proc_frame)
+                        # Resize back to match original for side-by-side
+                        processed = cv2.resize(processed, (w, h))
+                    else:
+                        processed = pipeline.process_frame(frame)
+                else:
+                    processed = pipeline.process_frame(frame)
             else:
-                processed = frame
+                processed = frame.copy()
+            
+            # Create a side-by-side comparison
+            h, w = frame.shape[:2]
+            
+            # Optimized labeling: draw directly on a stack if possible
+            # or just add labels to the combined image to save operations
+            combined = np.hstack((frame, processed))
+            
+            # Add labels to the combined frame
+            cv2.putText(combined, "ORIGINAL", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
+            cv2.putText(combined, f"AI ANALYSIS {'(GPU)' if is_gpu else '(CPU)'}", (w + 20, 50), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
+            
+            # Resize for bandwidth efficiency on web
+            if combined.shape[1] > 1280:
+                scale = 1280 / combined.shape[1]
+                combined = cv2.resize(combined, (0, 0), fx=scale, fy=scale)
                 
-            _, buffer = cv2.imencode('.jpg', processed)
+            _, buffer = cv2.imencode('.jpg', combined, [cv2.IMWRITE_JPEG_QUALITY, 75])
             
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
             
-            # Control speed to match original video
-            time.sleep(delay * 0.1) 
+            # Control speed
+            elapsed = time.time() - t_start
+            wait_time = max(0.001, frame_delay - elapsed)
+            time.sleep(wait_time)
             
         cap.release()
 
@@ -343,39 +356,6 @@ def health() -> JSONResponse:
         "pipeline_loaded": pipeline is not None,
         "gpu_available": torch.cuda.is_available(),
     })
-
-@app.get("/api/stream")
-async def stream_video():
-    if not os.path.exists(UPLOADED_VIDEO_PATH):
-        return Response(status_code=404)
-    
-    def generate():
-        cap = cv2.VideoCapture(UPLOADED_VIDEO_PATH)
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30
-        delay = 1.0 / fps
-        
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            # Process the frame in real-time (uses GPU if available)
-            if pipeline is not None:
-                processed = pipeline.process_frame(frame)
-            else:
-                processed = frame
-                
-            _, buffer = cv2.imencode('.jpg', processed)
-            
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            
-            # Control speed
-            time.sleep(delay * 0.1) # Aggressive speed for real-time feel
-            
-        cap.release()
-
-    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 # --- Static File Serving ---
 @app.get("/")

@@ -16,46 +16,52 @@ VADAS-India is an AI-powered driving assistance system optimized for Indian road
 
 This project is ready for deployment on Hugging Face Spaces using Docker.
 
-### Prerequisites
+### Model Checkpoints
 
-You will need the following model weights (checkpoints):
-1. **YOLOv8 Checkpoint**: `yolo_idd_best.pt`
-2. **U-Net Checkpoint**: `unet_drivable_best.pth`
+The model weights (checkpoints) must be uploaded to your Space:
+1. **YOLOv8 Checkpoint**: `yolo_idd_best.pt` → upload to `backend/checkpoints/`
+2. **U-Net Checkpoint**: `unet_drivable_best.pth` → upload to `backend/checkpoints/`
 
-### Environment Variables
+**Important**: These files are excluded from git via .dockerignore to avoid large transfers. Upload them directly to your Space using the Hugging Face web interface or git LFS.
 
-To make the models work on Hugging Face, you can either:
-- Upload them to the `backend/checkpoints/` directory in your Space.
-- **(Recommended)** Set the following Environment Variables in your Space Settings:
-  - `YOLO_CHECKPOINT_URL`: Direct download URL for the YOLO weights.
-  - `UNET_CHECKPOINT_URL`: Direct download URL for the U-Net weights.
+### Deployment Steps
 
-### Local Development
+1. **Create a new Space** on Hugging Face:
+   - Go to https://huggingface.co/spaces
+   - Click "Create new Space"
+   - Set SDK to "Docker"
+   - Choose a name (e.g., "VADAS")
 
-1. **Clone the repository**:
+2. **Clone the Space locally**:
    ```bash
-   git clone <repo-url>
+   git clone https://huggingface.co/spaces/Aystar/VADAS
    cd VADAS
    ```
 
-2. **Run with Docker**:
+3. **Copy your project files** to the Space directory (or push from your existing repo)
+
+4. **Upload model checkpoints** (required):
+   - Using web interface: Go to your Space → Files → Upload `backend/checkpoints/yolo_idd_best.pt` and `backend/checkpoints/unet_drivable_best.pth`
+   - Or using git LFS:
+     ```bash
+     git lfs install
+     git lfs track "backend/checkpoints/*.pt"
+     git lfs track "backend/checkpoints/*.pth"
+     git add backend/checkpoints/
+     git commit -m "Add model checkpoints"
+     git push
+     ```
+
+5. **Push to Hugging Face**:
    ```bash
-   docker build -t vadas .
-   docker run -p 7860:7860 vadas
+   git add .
+   git commit -m "Deploy VADAS to HF Spaces"
+   git push
    ```
 
-3. **Manual Setup**:
-   - **Backend**:
-     ```bash
-     pip install .
-     python run.py
-     ```
-   - **Frontend**:
-     ```bash
-     cd frontend
-     npm install
-     npm run dev
-     ```
+6. **Monitor the build**: The Space will automatically build and deploy. Check the "Logs" tab for progress.
+
+### Local Development
 
 ## 🛠 Features
 

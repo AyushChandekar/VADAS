@@ -43,8 +43,9 @@ WORKDIR /home/user/app
 # Copy dependency files first for caching
 COPY --chown=user pyproject.toml ./
 
-# Install project dependencies
-RUN pip install --user . torch torchvision
+# Install project dependencies using uv (faster than pip)
+RUN pip install --user uv
+RUN uv pip install --user . torch torchvision
 
 # Copy backend and other files
 COPY --chown=user backend ./backend

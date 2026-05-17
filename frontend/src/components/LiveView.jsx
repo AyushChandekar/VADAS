@@ -7,7 +7,7 @@ export default function LiveView() {
   useEffect(() => {
     const timer = setInterval(() => {
       setTimestamp(Date.now())
-    }, 1000) // refresh every 1 second (HF friendly)
+    }, 5000) // refresh every 5 seconds
     return () => clearInterval(timer)
   }, [])
 

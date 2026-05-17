@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:local": "VITE_BACKEND_HOST=localhost VITE_BACKEND_PORT=8000 vite",
     "build": "vite build",
     "preview": "vite preview"
   },

@@ -1,0 +1,49 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# ── Model weights (large binaries) ─────────────────────
+# Allow checkpoints folder but ignore generic weights elsewhere
+!backend/checkpoints/*.pth
+!backend/checkpoints/*.pt
+*.pth
+*.pt
+*.onnx
+*.engine
+
+# ── Datasets & training runs ───────────────────────────
+datasets/
+runs/
+trainingCodes/
+
+# ── Frontend build ─────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+
+# ── IDE / Editor ───────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS generated ───────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Claude Code ────────────────────────────────────────
+.claude/
+
+# ── Project-specific ignores ───────────────────────────
+generate_dev_plan.py
+*.docx
+
+results/
+
+VADAS_India_Development_Plan.docx
+

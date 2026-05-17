@@ -1,0 +1,25 @@
+# YOLOv8 dataset config for IDD Detection
+# Update 'path' to your local YOLO dataset directory
+
+path: ./datasets/idd_yolo
+train: images/train
+val: images/val
+test: images/test
+
+nc: 15
+names:
+  - animal
+  - autorickshaw
+  - bicycle
+  - bus
+  - car
+  - fence
+  - motorcycle
+  - person
+  - pole
+  - rider
+  - traffic_light
+  - traffic_sign
+  - truck
+  - vehicle_fallback
+  - wall

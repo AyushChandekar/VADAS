@@ -23,8 +23,8 @@ def main():
                         help="Camera source index or URL (default: 0)")
     parser.add_argument("--video", default=None,
                         help="Path to video file (overrides --camera)")
-    parser.add_argument("--port", type=int, default=8000,
-                        help="Backend API port (default: 8000)")
+    parser.add_argument("--port", type=int, default=7860 if os.environ.get("SPACE_ID") else 8000,
+                        help="Backend API port (default: 8000 or 7860 on HF)")
     parser.add_argument("--host", default="0.0.0.0",
                         help="Backend host (default: 0.0.0.0)")
     args = parser.parse_args()

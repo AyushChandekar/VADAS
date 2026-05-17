@@ -35,25 +35,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Create a non-root user for Hugging Face Spaces (UID 1000)
 RUN useradd -m -u 1000 user
-USER user
-ENV PATH="/home/user/.local/bin:${PATH}"
+
+# Install uv globally
+RUN pip install uv
 
 WORKDIR /home/user/app
 
 # Copy dependency files first for caching
-COPY --chown=user pyproject.toml ./
+COPY pyproject.toml ./
 
-# Install project dependencies using uv (faster than pip)
-RUN pip install --user uv
-RUN uv pip install --user . torch torchvision
+# Install heavy dependencies first for caching
+# Note: uv requires --system when not in a virtual environment
+RUN uv pip install --system torch torchvision
 
 # Copy backend and other files
 COPY --chown=user backend ./backend
 COPY --chown=user run.py ./
 COPY --chown=user .python-version ./
 
+# Install the project itself and remaining dependencies
+RUN uv pip install --system .
+
 # Copy built frontend
 COPY --chown=user --from=frontend-build /app/frontend/dist ./frontend/dist
+
+# Switch to non-root user
+USER user
+ENV PATH="/home/user/.local/bin:${PATH}"
 
 # Expose Hugging Face Spaces default port
 EXPOSE 7860
